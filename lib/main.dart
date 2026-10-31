@@ -1,7 +1,19 @@
 
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-void main() {
+import 'firebase_options.dart';
+import 'auth_gate.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const MyWeekApp());
 }
 
@@ -35,6 +47,29 @@ class Course {
   });
 
   int get durationMinutes => endMinutes - startMinutes;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'name': name,
+      'day': day,
+      'startMinutes': startMinutes,
+      'endMinutes': endMinutes,
+    };
+  }
+
+  factory Course.fromDocument(
+      DocumentSnapshot<Map<String, dynamic>> document,
+      ) {
+    final data = document.data()!;
+
+    return Course(
+      id: document.id,
+      name: data['name'] as String,
+      day: data['day'] as String,
+      startMinutes: (data['startMinutes'] as num).toInt(),
+      endMinutes: (data['endMinutes'] as num).toInt(),
+    );
+  }
 }
 
 int? parseTime(String value) {
@@ -68,6 +103,20 @@ String formatDuration(int totalMinutes) {
   return '${hours}h ${minutes}m';
 }
 
+// Firestore location for the currently signed-in user.
+CollectionReference<Map<String, dynamic>> userCoursesCollection() {
+  final user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    throw Exception('You must be signed in.');
+  }
+
+  return FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .collection('courses');
+}
+
 class MyWeekApp extends StatelessWidget {
   const MyWeekApp({super.key});
 
@@ -91,35 +140,13 @@ class MyWeekApp extends StatelessWidget {
         ),
         cardTheme: CardThemeData(
           color: Colors.white,
-          elevation: 1,
-          shadowColor: purple.withValues(alpha: 0.08),
+          elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
           ),
         ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFFF9F8FD),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(
-              color: Color(0xFFE6E1F2),
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(
-              color: purple,
-              width: 1.5,
-            ),
-          ),
-        ),
       ),
-      home: const TimetableScreen(),
+      home: const AuthGate(),
     );
   }
 }
@@ -132,660 +159,508 @@ class TimetableScreen extends StatefulWidget {
 }
 
 class _TimetableScreenState extends State<TimetableScreen> {
-  final List<Course> _courses = [
-    const Course(
-      id: '1',
-      name: 'Mobile Programming',
-      day: 'Monday',
-      startMinutes: 9 * 60,
-      endMinutes: 10 * 60,
-    ),
-    const Course(
-      id: '2',
-      name: 'Database Systems',
-      day: 'Monday',
-      startMinutes: 9 * 60 + 30,
-      endMinutes: 10 * 60 + 30,
-    ),
-    const Course(
-      id: '3',
-      name: 'Software Engineering',
-      day: 'Tuesday',
-      startMinutes: 8 * 60,
-      endMinutes: 10 * 60,
-    ),
-    const Course(
-      id: '4',
-      name: 'Web Development',
-      day: 'Wednesday',
-      startMinutes: 10 * 60,
-      endMinutes: 12 * 60,
-    ),
-    const Course(
-      id: '5',
-      name: 'Computer Networks',
-      day: 'Friday',
-      startMinutes: 13 * 60,
-      endMinutes: 15 * 60,
-    ),
-  ];
+  String _selectedDay = 'Monday';
 
-  List<Course> _coursesForDay(String day) {
-    final result = _courses
-        .where((course) => course.day == day)
-        .toList();
-
-    result.sort(
-          (a, b) => a.startMinutes.compareTo(b.startMinutes),
-    );
-
-    return result;
-  }
-
-  bool _overlaps(Course first, Course second) {
-    return first.startMinutes < second.endMinutes &&
-        second.startMinutes < first.endMinutes;
-  }
-
-  List<Course> _clashingCourses(Course course) {
-    return _courses.where((other) {
-      return other.id != course.id &&
-          other.day == course.day &&
-          _overlaps(course, other);
-    }).toList();
-  }
-
-  int _dailyMinutes(String day) {
-    return _coursesForDay(day).fold(
-      0,
-          (total, course) => total + course.durationMinutes,
-    );
-  }
-
-  int get _weeklyMinutes {
-    return _courses.fold(
-      0,
-          (total, course) => total + course.durationMinutes,
-    );
-  }
-
-  Future<void> _addCourse() async {
-    final newCourse = await Navigator.push<Course>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const CourseFormScreen(),
-      ),
-    );
-
-    if (!mounted || newCourse == null) return;
-
-    setState(() {
-      _courses.add(newCourse);
-    });
-  }
-
-  Future<void> _editCourse(Course course) async {
-    final updatedCourse = await Navigator.push<Course>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CourseFormScreen(course: course),
-      ),
-    );
-
-    if (!mounted || updatedCourse == null) return;
-
-    setState(() {
-      final index = _courses.indexWhere(
-            (item) => item.id == updatedCourse.id,
-      );
-
-      if (index != -1) {
-        _courses[index] = updatedCourse;
-      }
-    });
+  Future<void> _saveCourse(Course course) async {
+    await userCoursesCollection()
+        .doc(course.id)
+        .set(course.toMap());
   }
 
   Future<void> _deleteCourse(Course course) async {
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete course?'),
-        content: Text(
-          'Are you sure you want to delete "${course.name}"?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+    await userCoursesCollection().doc(course.id).delete();
 
-    if (!mounted || shouldDelete != true) return;
-
-    setState(() {
-      _courses.removeWhere((item) => item.id == course.id);
-    });
+    if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('${course.name} deleted'),
-        action: SnackBarAction(
-          label: 'UNDO',
-          onPressed: () {
-            setState(() {
-              if (!_courses.any(
-                    (item) => item.id == course.id,
-              )) {
-                _courses.add(course);
-              }
-            });
-          },
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _openAddCourse(List<Course> courses) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CourseFormScreen(
+          selectedDay: _selectedDay,
+          existingCourses: courses,
+          onSave: _saveCourse,
         ),
       ),
     );
   }
 
-  Color _dayColor(String day) {
-    switch (day) {
-      case 'Monday':
-        return const Color(0xFF7562C9);
-      case 'Tuesday':
-        return const Color(0xFF3987B8);
-      case 'Wednesday':
-        return const Color(0xFF399B83);
-      case 'Thursday':
-        return const Color(0xFFD58B42);
-      case 'Friday':
-        return const Color(0xFFCE668B);
-      default:
-        return const Color(0xFF64748B);
-    }
-  }
-
-  Widget _buildCourseCard(Course course) {
-    final clashes = _clashingCourses(course);
-    final hasClash = clashes.isNotEmpty;
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      elevation: 0,
-      color: hasClash
-          ? const Color(0xFFFFF8F4)
-          : const Color(0xFFFCFBFF),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(15),
-        side: BorderSide(
-          color: hasClash
-              ? const Color(0xFFFFD4BF)
-              : const Color(0xFFECE8F5),
+  void _openEditCourse(Course course, List<Course> courses) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CourseFormScreen(
+          selectedDay: course.day,
+          existingCourses: courses,
+          course: course,
+          onSave: _saveCourse,
         ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(15),
-        onTap: () => _editCourse(course),
-        child: Padding(
-          padding: const EdgeInsets.all(13),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 4,
-                height: hasClash ? 82 : 62,
-                decoration: BoxDecoration(
-                  color: hasClash ? Colors.deepOrange : purple,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      course.name,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: darkPurple,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.access_time_rounded,
-                          size: 15,
-                          color: purple,
-                        ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            '${formatMinutes(course.startMinutes)}'
-                                ' – '
-                                '${formatMinutes(course.endMinutes)}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF554F6C),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      formatDuration(course.durationMinutes),
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                        fontSize: 12,
-                      ),
-                    ),
-                    if (hasClash) ...[
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.all(9),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFE9DD),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.warning_amber_rounded,
-                              color: Colors.deepOrange,
-                              size: 18,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                'Clashes with: '
-                                    '${clashes.map((c) => c.name).join(', ')}',
-                                style: const TextStyle(
-                                  color: Color(0xFF9A3D10),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              PopupMenuButton<String>(
-                tooltip: 'Course actions',
-                onSelected: (value) {
-                  if (value == 'edit') {
-                    _editCourse(course);
-                  } else if (value == 'delete') {
-                    _deleteCourse(course);
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: Row(
-                      children: [
-                        Icon(Icons.edit_outlined),
-                        SizedBox(width: 10),
-                        Text('Edit'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline),
-                        SizedBox(width: 10),
-                        Text('Delete'),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDaySection(String day) {
-    final dayCourses = _coursesForDay(day);
-    final color = _dayColor(day);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 18),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: const Color(0xFFECE8F5),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF33245C).withValues(alpha: 0.035),
-            blurRadius: 14,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Icons.calendar_today_rounded,
-                  color: color,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      day,
-                      style: const TextStyle(
-                        color: darkPurple,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      dayCourses.isEmpty
-                          ? 'Free day'
-                          : '${dayCourses.length} '
-                          '${dayCourses.length == 1 ? 'class' : 'classes'}',
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  formatDuration(_dailyMinutes(day)),
-                  style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (dayCourses.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 18,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8F7FC),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.event_available_outlined,
-                    color: Colors.grey.shade500,
-                    size: 21,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'No classes on $day',
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else
-            ...dayCourses.map(_buildCourseCard),
-        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.auto_awesome_rounded, color: purple),
-            SizedBox(width: 9),
-            Text(
-              'My Week',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: darkPurple,
-                fontSize: 23,
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: userCoursesCollection().snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('My Week')),
+            body: const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Text(
+                  'Could not load your courses. Please check your '
+                      'internet connection and Firestore settings.',
+                  textAlign: TextAlign.center,
+                ),
               ),
             ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCourse,
-        backgroundColor: purple,
-        foregroundColor: Colors.white,
-        elevation: 4,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text(
-          'Add course',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFF7562C9),
-                      Color(0xFF9B88E5),
-                    ],
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(color: purple),
+            ),
+          );
+        }
+
+        final courses = snapshot.data!.docs
+            .map((document) => Course.fromDocument(document))
+            .toList();
+
+        final selectedDayCourses = courses
+            .where((course) => course.day == _selectedDay)
+            .toList()
+          ..sort(
+                (a, b) => a.startMinutes.compareTo(b.startMinutes),
+          );
+
+        final totalWeeklyMinutes = courses.fold<int>(
+          0,
+              (total, course) => total + course.durationMinutes,
+        );
+
+        final totalDailyMinutes = selectedDayCourses.fold<int>(
+          0,
+              (total, course) => total + course.durationMinutes,
+        );
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Row(
+              children: [
+                Icon(Icons.auto_awesome_rounded, color: purple),
+                SizedBox(width: 9),
+                Text(
+                  'My Week',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: darkPurple,
+                    fontSize: 23,
                   ),
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: purple.withValues(alpha: 0.22),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'YOUR WEEK AT A GLANCE',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 11,
-                              letterSpacing: 1.5,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.17),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.calendar_month_rounded,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      formatDuration(_weeklyMinutes),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    const Text(
-                      'Total scheduled class hours',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        _summaryItem(
-                          Icons.menu_book_rounded,
-                          '${_courses.length}',
-                          'Courses',
-                        ),
-                        const SizedBox(width: 22),
-                        _summaryItem(
-                          Icons.calendar_view_week_rounded,
-                          '${_courses.map((c) => c.day).toSet().length}',
-                          'Active days',
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              child: Row(
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                tooltip: 'Log out',
+                onPressed: () async {
+                  await FirebaseAuth.instance.signOut();
+                },
+              ),
+            ],
+          ),
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Weekly timetable',
-                      style: TextStyle(
-                        color: darkPurple,
-                        fontSize: 19,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                  _buildWelcomeSection(),
+                  const SizedBox(height: 22),
+                  _buildSummaryCards(
+                    courses.length,
+                    totalWeeklyMinutes,
                   ),
-                  Text(
-                    'MON – SUN',
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1,
-                    ),
+                  const SizedBox(height: 25),
+                  _buildDaySelector(),
+                  const SizedBox(height: 18),
+                  _buildDailySummary(
+                    selectedDayCourses.length,
+                    totalDailyMinutes,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildCourseList(
+                    selectedDayCourses,
+                    courses,
                   ),
                 ],
               ),
             ),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                children: weekDays.map(_buildDaySection).toList(),
-              ),
+          ),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => _openAddCourse(courses),
+            backgroundColor: purple,
+            foregroundColor: Colors.white,
+            icon: const Icon(Icons.add),
+            label: const Text(
+              'Add Course',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildWelcomeSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Your week,',
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: darkPurple,
+          ),
         ),
+        const Text(
+          'beautifully organized.',
+          style: TextStyle(
+            fontSize: 20,
+            color: purple,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Plan your classes and make every hour count.',
+          style: TextStyle(
+            fontSize: 14,
+            color: darkPurple.withOpacity(0.65),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryCards(int courseCount, int weeklyMinutes) {
+    return Row(
+      children: [
+        Expanded(
+          child: _summaryCard(
+            icon: Icons.menu_book_rounded,
+            label: 'Total courses',
+            value: '$courseCount',
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _summaryCard(
+            icon: Icons.schedule_rounded,
+            label: 'Weekly hours',
+            value: formatDuration(weeklyMinutes),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryCard({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: purple, size: 25),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: darkPurple,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: darkPurple.withOpacity(0.6),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _summaryItem(
-      IconData icon,
-      String value,
-      String label,
-      ) {
-    return Row(
+  Widget _buildDaySelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: Colors.white70, size: 19),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              value,
+        const Text(
+          'Your timetable',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: darkPurple,
+          ),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 43,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: weekDays.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final day = weekDays[index];
+              final isSelected = day == _selectedDay;
+
+              return ChoiceChip(
+                label: Text(day.substring(0, 3)),
+                selected: isSelected,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedDay = day;
+                  });
+                },
+                selectedColor: purple,
+                backgroundColor: Colors.white,
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.white : darkPurple,
+                  fontWeight: FontWeight.w600,
+                ),
+                side: BorderSide(
+                  color: isSelected ? purple : Colors.transparent,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(13),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDailySummary(int count, int dailyMinutes) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: purple.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.calendar_today_rounded, color: purple),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '$_selectedDay • $count courses',
               style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
+                color: darkPurple,
+                fontWeight: FontWeight.w600,
               ),
             ),
+          ),
+          Text(
+            formatDuration(dailyMinutes),
+            style: const TextStyle(
+              color: purple,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCourseList(
+      List<Course> dayCourses,
+      List<Course> allCourses,
+      ) {
+    if (dayCourses.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+          vertical: 40,
+          horizontal: 20,
+        ),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              Icons.event_available_rounded,
+              size: 48,
+              color: purple.withOpacity(0.55),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Nothing planned yet',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: darkPurple,
+              ),
+            ),
+            const SizedBox(height: 6),
             Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 11,
+              'Add a course to organize your day.',
+              style: TextStyle(
+                color: darkPurple.withOpacity(0.6),
               ),
             ),
           ],
         ),
-      ],
+      );
+    }
+
+    return Column(
+      children: dayCourses.map((course) {
+        return _courseCard(course, allCourses);
+      }).toList(),
+    );
+  }
+
+  Widget _courseCard(Course course, List<Course> allCourses) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(
+          color: purple.withOpacity(0.12),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 5,
+            height: 65,
+            decoration: BoxDecoration(
+              color: purple,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  course.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: darkPurple,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time_rounded,
+                      size: 15,
+                      color: purple,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      '${formatMinutes(course.startMinutes)} - '
+                          '${formatMinutes(course.endMinutes)}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: darkPurple.withOpacity(0.65),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(
+              Icons.more_vert,
+              color: darkPurple,
+            ),
+            onSelected: (value) {
+              if (value == 'edit') {
+                _openEditCourse(course, allCourses);
+              } else if (value == 'delete') {
+                _deleteCourse(course);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'edit',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit_outlined, size: 19),
+                    SizedBox(width: 9),
+                    Text('Edit'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline, size: 19),
+                    SizedBox(width: 9),
+                    Text('Delete'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
 
 class CourseFormScreen extends StatefulWidget {
+  final String selectedDay;
+  final List<Course> existingCourses;
   final Course? course;
+  final Future<void> Function(Course) onSave;
 
-  const CourseFormScreen({super.key, this.course});
+  const CourseFormScreen({
+    super.key,
+    required this.selectedDay,
+    required this.existingCourses,
+    required this.onSave,
+    this.course,
+  });
 
   @override
   State<CourseFormScreen> createState() => _CourseFormScreenState();
@@ -798,7 +673,9 @@ class _CourseFormScreenState extends State<CourseFormScreen> {
   late final TextEditingController _startController;
   late final TextEditingController _endController;
 
-  String _selectedDay = 'Monday';
+  late String _selectedDay;
+
+  bool _isSaving = false;
 
   bool get _isEditing => widget.course != null;
 
@@ -806,25 +683,23 @@ class _CourseFormScreenState extends State<CourseFormScreen> {
   void initState() {
     super.initState();
 
-    final course = widget.course;
+    _selectedDay = widget.course?.day ?? widget.selectedDay;
 
     _nameController = TextEditingController(
-      text: course?.name ?? '',
-    );
-    _startController = TextEditingController(
-      text: course == null
-          ? ''
-          : formatMinutes(course.startMinutes),
-    );
-    _endController = TextEditingController(
-      text: course == null
-          ? ''
-          : formatMinutes(course.endMinutes),
+      text: widget.course?.name ?? '',
     );
 
-    if (course != null) {
-      _selectedDay = course.day;
-    }
+    _startController = TextEditingController(
+      text: widget.course == null
+          ? ''
+          : formatMinutes(widget.course!.startMinutes),
+    );
+
+    _endController = TextEditingController(
+      text: widget.course == null
+          ? ''
+          : formatMinutes(widget.course!.endMinutes),
+    );
   }
 
   @override
@@ -835,50 +710,74 @@ class _CourseFormScreenState extends State<CourseFormScreen> {
     super.dispose();
   }
 
-  String? _validateTime(String? value) {
-    if (value == null || value.trim().isEmpty) {
-      return 'Please enter a time';
-    }
+  Future<void> _saveCourse() async {
+    if (_isSaving) return;
 
-    if (parseTime(value) == null) {
-      return 'Use 24-hour HH:MM format, e.g. 09:30';
-    }
-
-    return null;
-  }
-
-  void _saveCourse() {
     if (!_formKey.currentState!.validate()) return;
 
-    final name = _nameController.text.trim();
-    final start = parseTime(_startController.text)!;
-    final end = parseTime(_endController.text)!;
+    final start = parseTime(_startController.text);
+    final end = parseTime(_endController.text);
+
+    if (start == null || end == null) return;
 
     if (end <= start) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Invalid time: End time must be later than start time.',
-          ),
-          duration: Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.red,
+          content: Text('End time must be after start time.'),
         ),
       );
       return;
     }
 
-    final course = Course(
+    final hasOverlap = widget.existingCourses.any((course) {
+      if (course.id == widget.course?.id) return false;
+      if (course.day != _selectedDay) return false;
+
+      return start < course.endMinutes &&
+          end > course.startMinutes;
+    });
+
+    if (hasOverlap) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This course overlaps another course.'),
+        ),
+      );
+      return;
+    }
+
+    final newCourse = Course(
       id: widget.course?.id ??
           DateTime.now().microsecondsSinceEpoch.toString(),
-      name: name,
+      name: _nameController.text.trim(),
       day: _selectedDay,
       startMinutes: start,
       endMinutes: end,
     );
 
-    Navigator.pop(context, course);
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      await widget.onSave(newCourse);
+
+      if (!mounted) return;
+
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save course: $error'),
+        ),
+      );
+
+      setState(() {
+        _isSaving = false;
+      });
+    }
   }
 
   @override
@@ -888,185 +787,206 @@ class _CourseFormScreenState extends State<CourseFormScreen> {
         title: Text(
           _isEditing ? 'Edit Course' : 'Add Course',
           style: const TextStyle(
-            fontWeight: FontWeight.bold,
             color: darkPurple,
+            fontWeight: FontWeight.bold,
           ),
         ),
       ),
       body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [
-                      Color(0xFF7562C9),
-                      Color(0xFF9B88E5),
-                    ],
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Course details',
+                  style: TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.bold,
+                    color: darkPurple,
                   ),
-                  borderRadius: BorderRadius.circular(22),
                 ),
-                child: const Row(
-                  children: [
-                    Icon(
-                      Icons.menu_book_rounded,
-                      color: Colors.white,
-                      size: 35,
+                const SizedBox(height: 8),
+                Text(
+                  'Add the details of your class below.',
+                  style: TextStyle(
+                    color: darkPurple.withOpacity(0.6),
+                  ),
+                ),
+                const SizedBox(height: 25),
+
+                const Text(
+                  'Course name',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: darkPurple,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                TextFormField(
+                  controller: _nameController,
+                  decoration: InputDecoration(
+                    hintText: 'e.g. Software Engineering',
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
                     ),
-                    SizedBox(width: 15),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Course details',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          SizedBox(height: 5),
-                          Text(
-                            'Organize your study week',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter a course name.';
+                    }
+                    return null;
+                  },
+                ),
+
+                const SizedBox(height: 20),
+                const Text(
+                  'Day',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: darkPurple,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                DropdownButtonFormField<String>(
+                  value: _selectedDay,
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  items: weekDays.map((day) {
+                    return DropdownMenuItem(
+                      value: day,
+                      child: Text(day),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedDay = value;
+                      });
+                    }
+                  },
+                ),
+
+                const SizedBox(height: 20),
+                const Text(
+                  'Start time',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: darkPurple,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                TextFormField(
+                  controller: _startController,
+                  keyboardType: TextInputType.datetime,
+                  decoration: InputDecoration(
+                    hintText: '08:00',
+                    helperText: 'Use 24-hour format, e.g. 08:30',
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  validator: (value) {
+                    if (value == null || parseTime(value) == null) {
+                      return 'Enter a valid time, e.g. 08:30.';
+                    }
+                    return null;
+                  },
+                ),
+
+                const SizedBox(height: 20),
+                const Text(
+                  'End time',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: darkPurple,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                TextFormField(
+                  controller: _endController,
+                  keyboardType: TextInputType.datetime,
+                  decoration: InputDecoration(
+                    hintText: '10:00',
+                    helperText: 'Use 24-hour format, e.g. 10:00',
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  validator: (value) {
+                    if (value == null || parseTime(value) == null) {
+                      return 'Enter a valid time, e.g. 10:00.';
+                    }
+                    return null;
+                  },
+                ),
+
+                const SizedBox(height: 30),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: purple,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(52),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
                       ),
                     ),
-                  ],
+                    onPressed: _isSaving ? null : _saveCourse,
+                    icon: _isSaving
+                        ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                        : const Icon(Icons.check_circle_outline),
+                    label: Text(
+                      _isSaving
+                          ? 'Saving...'
+                          : (_isEditing ? 'Save Changes' : 'Add Course'),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 25),
-              const Text(
-                'Course name',
-                style: TextStyle(
-                  color: darkPurple,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _nameController,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  hintText: 'e.g. Mobile Programming',
-                  prefixIcon: Icon(Icons.menu_book_outlined),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter a course name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Day of the week',
-                style: TextStyle(
-                  color: darkPurple,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: _selectedDay,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.calendar_today_outlined),
-                ),
-                items: weekDays.map((day) {
-                  return DropdownMenuItem(
-                    value: day,
-                    child: Text(day),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _selectedDay = value;
-                    });
-                  }
-                },
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Start time',
-                style: TextStyle(
-                  color: darkPurple,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _startController,
-                keyboardType: TextInputType.datetime,
-                decoration: const InputDecoration(
-                  hintText: '09:00',
-                  helperText: 'Use 24-hour format, e.g. 09:00',
-                  prefixIcon: Icon(Icons.schedule_rounded),
-                ),
-                validator: _validateTime,
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'End time',
-                style: TextStyle(
-                  color: darkPurple,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _endController,
-                keyboardType: TextInputType.datetime,
-                decoration: const InputDecoration(
-                  hintText: '11:00',
-                  helperText: 'Must be later than the start time',
-                  prefixIcon: Icon(Icons.schedule_outlined),
-                ),
-                validator: _validateTime,
-              ),
-              const SizedBox(height: 28),
-              SizedBox(
-                height: 54,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: purple,
-                    foregroundColor: Colors.white,
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: purple,
+                    minimumSize: const Size.fromHeight(48),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
                   ),
-                  onPressed: _saveCourse,
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: Text(
-                    _isEditing ? 'Save Changes' : 'Add Course',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  onPressed: _isSaving
+                      ? null
+                      : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
                 ),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: purple,
-                  minimumSize: const Size.fromHeight(48),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                ),
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

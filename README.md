@@ -1,50 +1,85 @@
-# My Week – Weekly Class Timetable
+# My Week – Weekly Timetable App
 
-## Project Description
+## 1. Project Overview
 
-My Week is a Flutter application that helps students organize their weekly class timetable. Students can view their courses for each day, check class times, and calculate their daily and weekly scheduled class hours.
+My Week is a Flutter-based weekly timetable application that helps students organize and manage their academic schedules.
 
-## Features
+The application allows users to create personal accounts, add courses, view their weekly timetables, edit course information, and delete courses.
 
-- View the weekly timetable from Monday to Sunday.
-- Add new courses with a course name, day, start time, and end time.
-- Edit existing courses.
-- Delete courses with confirmation and undo.
-- Automatically sort courses by start time.
-- Detect overlapping classes and display clash warnings.
-- Calculate daily and weekly scheduled class hours.
-- Validate time inputs using the 24-hour HH:MM format.
-- Display a message when a day has no scheduled classes.
+It uses Firebase to authenticate users and Firestore to store course information securely.
 
-## Technologies Used
+## 2. Features
 
-- Flutter
-- Dart
-- Material Design
+- User registration and login.
+- Secure user authentication using Firebase Authentication.
+- Add new courses to a weekly timetable.
+- View courses organized by day.
+- Edit existing course information.
+- Delete courses.
+- Save course information in Firebase Firestore.
+- Keep course information after logging out and signing back in.
+- Separate timetables for different users.
 
-## How to Run the Project
+## 3. Technologies Used
 
-1. Install Flutter and set up the development environment.
-2. Open the project folder in Android Studio or VS Code.
-3. Open the terminal in the project folder.
-4. Run `flutter pub get`.
-5. Run `flutter run -d edge` to launch the app in Microsoft Edge.
+- **Flutter:** Application development framework.
+- **Dart:** Programming language.
+- **Firebase Authentication:** User registration and login.
+- **Cloud Firestore:** Cloud database for storing course information.
+- **Android Studio:** Development environment.
 
-## Screenshots
+## 4. How to Run the Project
 
-Create a folder named `screenshots` and add at least four screenshots of your completed application.
+1. Install Flutter and Android Studio.
+2. Clone or download this repository.
+3. Open the project in Android Studio.
+4. Run the following command to install dependencies:
 
-- `screenshots/weeklyss-view.png` – Weekly timetable.
-- `screenshots/course-form.png` – Add or edit course form.
-- `screenshots/clash-detection.png` – Overlapping course warnings.
-- `screenshots/time-validation.png` – Invalid time validation message.
+   ```bash
+   flutter pub get
+   ```
 
-## Think Questions
+5. Make sure the Firebase configuration files are correctly configured.
+6. Run the application:
 
-### 1. How does the app detect a clash between two courses?
+   ```bash
+   flutter run
+   ```
 
-Two courses clash when they are scheduled on the same day and their time intervals overlap. If one course ends exactly when another begins, they do not clash.
+## 5. Database Structure
 
-### 2. Why does the app store times as minutes instead of text?
+The application uses Cloud Firestore.
 
-Storing times as minutes makes it easier to compare course times, sort courses, detect clashes, and calculate durations. For example, 08:30 is stored as 510 minutes after midnight.
+Each authenticated user has a separate collection of courses:
+
+```text
+users
+  └── userId
+       └── courses
+            ├── courseId
+            ├── courseId
+            └── courseId
+```
+
+Each user can only access their own course information through the application's authentication and Firestore security rules.
+
+## 6. Testing
+
+The following features have been tested successfully:
+
+- User registration and login.
+- Adding courses.
+- Viewing saved courses.
+- Editing courses.
+- Deleting courses.
+- Saving and retrieving data from Firestore.
+- Keeping course data after logging out and signing in again.
+- Separating course information between different user accounts.
+
+## 7. Project Purpose
+
+The purpose of My Week is to help students manage their academic schedules more easily, stay organized, and keep track of their weekly classes.
+
+## 8. Author
+
+Developed as a student project using Flutter, Dart, and Firebase.
